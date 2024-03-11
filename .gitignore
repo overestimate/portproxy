@@ -1,0 +1,4 @@
+# ignore binary
+portproxy.exe
+# ignore personal config
+config.json

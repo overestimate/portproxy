@@ -1,0 +1,19 @@
+{
+    "portRange": {
+        "start": 54000,
+        "end": 54010
+    },
+    "autoPort": false,
+    "mappings": [
+        {
+            "protocol": "udp",
+            "internalIp": null,
+            "internalPort": 24642,
+            "portOffset": 0
+        }
+    ],
+    "allowExternalConnectionsFromOwnIp": true,
+    "allowlist": [],
+    "denylist": [],
+    "allowNotExplicitDenied": false
+}
