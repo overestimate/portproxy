@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -95,8 +96,17 @@ func GetCurrentIp() string {
 	return string(resBody)
 }
 
+func StripPort(ip string) string {
+	// jank magic to strip port
+	r := []rune(ip)
+	slices.Reverse(r)
+	r = []rune(strings.Join(strings.Split(string(r), ":")[1:], ":"))
+	slices.Reverse(r)
+	return string(r)
+}
+
 func IsIpValid(ip string) bool {
-	remote := net.ParseIP(ip)
+	remote := net.ParseIP(StripPort(ip))
 	for _, v := range Config.Denylist {
 		if remote.Equal(net.ParseIP(v)) {
 			return false
@@ -133,7 +143,7 @@ func CloseOnTerminate(closer io.Closer, info MapInfo) {
 func CreateTCPListener(host *string, from int, to int, info MapInfo) {
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%v", from))
 	if err != nil {
-		log.Println("error!", err)
+		log.Println("failed opening tcp listener with error:", err)
 		return
 	}
 	go CloseOnTerminate(listener, info)
@@ -143,7 +153,7 @@ func CreateTCPListener(host *string, from int, to int, info MapInfo) {
 			return
 		}
 		if err != nil {
-			log.Println("error!", err)
+			log.Println("tcp listener failed to accept connection with error:", err)
 			return
 		}
 		ip := "127.0.0.1"
@@ -166,7 +176,7 @@ func NetworkPipeTCP(from net.Conn, to net.Conn) {
 			}
 			if err != nil {
 				if !errors.Is(err, io.EOF) {
-					log.Println("error!", err)
+					log.Println("non-eof non-closed tcp read in pipe error:", err)
 					return
 				}
 			}
@@ -181,13 +191,13 @@ func NetworkPipeTCP(from net.Conn, to net.Conn) {
 
 func HandleConnectionTCP(conn net.Conn, origin string, info MapInfo) {
 	if !IsIpValid(conn.RemoteAddr().String()) {
-		fmt.Println("invalid ip", conn.RemoteAddr().String())
 		return
 	}
 	fmt.Printf("handling connection from %v to origin %v\n", conn.RemoteAddr(), origin)
 	dial, err := net.Dial("tcp", origin)
 	if err != nil {
-		log.Println("error!", err)
+		log.Println("failed to open tcp connection to origin with error:", err)
+		return
 	}
 	go CloseOnTerminate(dial, info)
 	go NetworkPipeTCP(conn, dial)
@@ -195,25 +205,24 @@ func HandleConnectionTCP(conn net.Conn, origin string, info MapInfo) {
 }
 
 func CreateUDPListener(host *string, from int, to int, info MapInfo) {
-	ip := ""
+	ip := "127.0.0.1"
 	if host != nil {
 		ip = *host
 	}
 	laddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%v", from))
 	if err != nil {
-		log.Println("failed opening udp port with error:", err)
+		log.Println("failed resolving local udp port with error:", err)
 		return
 	}
 	conn, err := net.ListenUDP("udp", laddr)
 	if err != nil {
-		log.Println("error!", err)
-		log.Println("bye")
+		log.Println("failed opening local udp server with error:", err)
 		return
 	}
 	go CloseOnTerminate(conn, info)
 	raddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%v:%v", ip, to))
 	if err != nil {
-		log.Println("error while resolving server. error:", err)
+		log.Println("error while resolving remove server with error:", err)
 		return
 	}
 	proxyDials := make(map[string]*net.UDPConn)
@@ -228,7 +237,7 @@ func CreateUDPListener(host *string, from int, to int, info MapInfo) {
 				return
 			}
 			if err != nil {
-				log.Println("error!", err)
+				log.Println("non-closed udp read problem in listener with error:", err)
 				return
 			}
 			addr = add
@@ -237,14 +246,13 @@ func CreateUDPListener(host *string, from int, to int, info MapInfo) {
 				break
 			}
 		}
-		log.Println(addr, proxyDials, proxyDials[addr.String()])
 		if proxyDials[addr.String()] == nil {
 			if !IsIpValid(addr.String()) {
 				continue
 			}
 			dial, err := net.DialUDP("udp", nil, raddr)
 			if err != nil {
-				log.Println("error!", err)
+				log.Println("failed opening connection to remote service with error:", err)
 				continue
 			}
 			proxyDials[addr.String()] = dial
@@ -264,7 +272,7 @@ func UDPReplyManager(conn *net.UDPConn, dial *net.UDPConn, addr *net.UDPAddr) {
 			if errors.Is(err, net.ErrClosed) {
 				return
 			} else if err != nil {
-				log.Println("error!", err)
+				log.Println("non-closed udp read problem in reply manager with error:", err)
 				continue
 			}
 			res = append(res, buf[0:n]...)
@@ -289,6 +297,7 @@ func Terminator(killswitch chan bool, target chan MapInfo) {
 		case m := <-target:
 			if chanMap[m] != nil {
 				chanMap[m] <- m
+				chanMap[m] = nil // free channel
 			}
 		}
 	}
