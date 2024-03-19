@@ -22,9 +22,18 @@ const (
 var (
 	WaitingOnTerminate chan chan MapInfo
 	Config             Configuration
-	HelpList           []string
 	OwnIp              string
+
+	HelpList            []string
+	ConditionalHelpList struct {
+		Messages []string
+		Checks   []CheckFn
+	}
+
+	isLocalConfig bool
 )
+
+type CheckFn (func() bool)
 
 // used for console printing and targeted termination
 type MapInfo struct {
@@ -311,36 +320,70 @@ func init() {
 		"unmap <id> - unmaps mapping with id. use \"mappings\" to get the id",
 		"proxy [ip:]<port> <port> <proto> - proxies ip:port through specified port.\n    ip defaults to 127.0.0.1",
 	}
-	WaitingOnTerminate = make(chan chan MapInfo)
 
+	ConditionalHelpList = struct {
+		Messages []string
+		Checks   []CheckFn
+	}{
+		Messages: []string{
+			"globalize - copy local config.json to global location",
+		},
+		Checks: []CheckFn{
+			func() bool {
+				// TODO: implement globalize and enable this
+				return false
+				// return isLocalConfig
+			},
+		},
+	}
+
+	WaitingOnTerminate = make(chan chan MapInfo)
 	Config.Defaults()
 	OwnIp = GetCurrentIp()
 }
 
 func main() {
+	home, err := os.UserHomeDir()
+
+	if err != nil {
+		log.Fatalln("failed to get your home directory. error:", err)
+	}
 	activeMappings := make([]MapInfo, 0)
 	configFile, err := os.Open("config.json")
 	if err != nil {
-		log.Fatalln("config.json not present. please set up portproxy properly")
+		isLocalConfig = false
+		configFile, err = os.Open(home + "/config.json")
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				log.Println("global config.json does not exist, starting with default config and no mappings.")
+				log.Println("write your config (using config.example.json as a base) in the following location, then restart:", home+"/config.json")
+			}
+			log.Fatalln("failed to open config.json despite it existing (do you not have permissions?) error:", err)
+		}
+	} else {
+		isLocalConfig = true
+		fmt.Println("config.json found in cwd, using that instead of global config")
 	}
 	defer configFile.Close()
-	configJson := make([]byte, CHUNKSIZE)
-	buf := make([]byte, CHUNKSIZE)
-	total_read := 0
-	for {
-		n, err := configFile.Read(configJson)
+	if configFile != nil {
+		configJson := make([]byte, CHUNKSIZE)
+		buf := make([]byte, CHUNKSIZE)
+		total_read := 0
+		for {
+			n, err := configFile.Read(configJson)
+			if err != nil {
+				log.Fatalln("error occured while reading config.json:", err)
+			}
+			total_read += n
+			configJson = append(configJson, buf[0:n]...)
+			if n != CHUNKSIZE {
+				break
+			}
+		}
+		err = json.Unmarshal(configJson[:total_read], &Config)
 		if err != nil {
-			log.Fatalln("error occured while reading config.json:", err)
+			log.Fatalln("config.json isn't valid! error thrown:", err)
 		}
-		total_read += n
-		configJson = append(configJson, buf[0:n]...)
-		if n != CHUNKSIZE {
-			break
-		}
-	}
-	err = json.Unmarshal(configJson[:total_read], &Config)
-	if err != nil {
-		log.Fatalln("config.json isn't valid! error thrown:", err)
 	}
 
 	killswitch := make(chan bool)
@@ -405,6 +448,12 @@ func main() {
 			fmt.Println("help menu:")
 			for _, text := range HelpList {
 				fmt.Printf("  %v\n", text)
+			}
+			for i, text := range ConditionalHelpList.Messages {
+				check := ConditionalHelpList.Checks[i]
+				if check() {
+					fmt.Printf("  %v\n", text)
+				}
 			}
 		} else if command == "proxy" {
 			if len(parsed_args) != 3 {
@@ -487,6 +536,14 @@ func main() {
 			} else {
 				fmt.Println("id not found")
 			}
+		} else if command == "globalize" {
+			if !isLocalConfig {
+				fmt.Println("globalize does not work when using global config")
+			} else {
+				// TODO: write this command!!
+				fmt.Println("unimplemented")
+			}
+
 		} else {
 			fmt.Println("unknown command")
 		}
